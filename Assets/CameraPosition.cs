@@ -64,17 +64,17 @@ public class CameraPosition : MonoBehaviour {
 	public void OnCollisionEnter(Collision collision) {
 		if(collision.gameObject.CompareTag("Mergeable")) {
 			if(collision.rigidbody != null) {
-				if(collision.rigidbody.mass > rb.mass) {
-					Debug.Log("Too massive to collect");
-					return;
-				}
+				// if(collision.rigidbody.mass > rb.mass) {
+					// Debug.Log("Too massive to collect");
+					// return;
+				// }
 
 				collision.rigidbody.isKinematic = true;
 				rb.mass += collision.rigidbody.mass;
 			}
 
 			// 'Gravity'
-			collision.transform.position = (collision.transform.position - transform.position) / 1.4f + transform.position;
+			collision.transform.position = (collision.transform.position - transform.position) / 5f + transform.position;
 
 			collision.transform.parent = transform.Find("Attached");
 
