@@ -4,7 +4,7 @@ using System.Linq;
 using UnityEngine;
 
 public class CameraPosition : MonoBehaviour {
-	public Camera camera;
+	public Camera playerCamera;
 
 	public Vector3 offset = new Vector3(2f, 7f, 0);
 	public float rotation = 0f;
@@ -17,8 +17,8 @@ public class CameraPosition : MonoBehaviour {
 	public float floorDistance = 1f;
 	public Vector2 lookLimits = new Vector2(0, 10f);
 
-	public float totalMass = 0f;
 	public float totalMerges = 0;
+	public float maxRadius = 0;
 
 	private Rigidbody rb;
 
@@ -29,22 +29,20 @@ public class CameraPosition : MonoBehaviour {
 
 		rb = GetComponent<Rigidbody>();
 
-		totalMass += rb.mass;
-
 		GenerateCollisionMesh();
 	}
 
 	public void LateUpdate() {
-		// Camera
+		// playerCamera
 		rotation += Input.GetAxis("Mouse X") * rotationSpeed;
 		rotation = (rotation + 360) % 360;
 
 		offset.y = Mathf.Clamp(offset.y + Input.GetAxis("Mouse Y") * lookSpeed, lookLimits.x, lookLimits.y);
 		offset.x = Mathf.Clamp(offset.x + Input.GetAxis("Mouse Y") * lookSpeed, lookLimits.x, lookLimits.y);
 
-		camera.transform.position = transform.position + offset;
-		camera.transform.LookAt(transform.position);
-		camera.transform.RotateAround(transform.position, Vector3.up, rotation);
+		playerCamera.transform.position = transform.position + offset;
+		playerCamera.transform.LookAt(transform.position);
+		playerCamera.transform.RotateAround(transform.position, Vector3.up, rotation);
 	}
 
 	public void FixedUpdate() {
@@ -53,8 +51,8 @@ public class CameraPosition : MonoBehaviour {
 		float v = Input.GetAxis("Vertical") * movementSpeed * Time.deltaTime;
 
 		// Move in the direction we are looking at
-		rb.AddTorque(new Vector3(camera.transform.forward.x, 0, camera.transform.forward.z) * -h);
-		rb.AddTorque(new Vector3(camera.transform.right.x, 0, camera.transform.right.z) * v);
+		rb.AddTorque(new Vector3(playerCamera.transform.forward.x, 0, playerCamera.transform.forward.z) * -h);
+		rb.AddTorque(new Vector3(playerCamera.transform.right.x, 0, playerCamera.transform.right.z) * v);
 
 		// Jump
 		RaycastHit hit;
@@ -65,14 +63,24 @@ public class CameraPosition : MonoBehaviour {
 
 	public void OnCollisionEnter(Collision collision) {
 		if(collision.gameObject.CompareTag("Mergeable")) {
-			collision.gameObject.transform.parent = transform;
 			if(collision.rigidbody != null) {
+				if(collision.rigidbody.mass > rb.mass) {
+					Debug.Log("Too massive to collect");
+					return;
+				}
+
 				collision.rigidbody.isKinematic = true;
-				totalMass += collision.rigidbody.mass;
+				rb.mass += collision.rigidbody.mass;
 			}
-			if(collision.collider != null) collision.collider.enabled = false;
+
+			// 'Gravity'
+			collision.transform.position = (collision.transform.position - transform.position) / 1.4f + transform.position;
+
+			collision.transform.parent = transform.Find("Attached");
+
 			totalMerges += 1;
-			SetAllLayers(collision.gameObject.transform, LayerMask.NameToLayer("Player"));
+			SetAllLayers(collision.transform, LayerMask.NameToLayer("Player"));
+			GenerateCollisionMesh();
 		}
 	}
 
@@ -86,7 +94,14 @@ public class CameraPosition : MonoBehaviour {
 	}
 
 	private void GenerateCollisionMesh() {
-		int resolution = 3;
+		Vector3 initialVelocity = rb.velocity;
+		foreach(Transform child in transform.Find("Attached")) {
+			if(child.gameObject.GetComponent<Collider>()) {
+				child.gameObject.GetComponent<Collider>().enabled = true;
+			}
+		}
+
+		int resolution = 12;
 
 		Vector3[] vertices = new Vector3[resolution * resolution];
 		int[] triangles = new int[6 * resolution * (resolution - 1)];
@@ -104,31 +119,37 @@ public class CameraPosition : MonoBehaviour {
 				Vector3 direction = new Vector3(cosLat * cosLon, cosLat * sinLon, sinLat).normalized;
 
 				// Find the outermost transform
-				RaycastHit hit = Physics
-					.RaycastAll(transform.position, direction, Mathf.Infinity, LayerMask.GetMask("Player"))
-					.OrderByDescending(h => h.distance)
-					.FirstOrDefault();
+				IOrderedEnumerable<RaycastHit> hits = Physics
+					.RaycastAll(transform.position + direction * 10000, -direction, 10000, LayerMask.GetMask("Player"))
+					.OrderBy(h => h.distance);
 
-				vertices[i * resolution + j] = hit.point - transform.position; // Relative to this.
-
-				Debug.Log("Vert:" + lat + "," + lon + " " + direction + " " + vertices[i * resolution + j]);
+				if(hits.Count() > 0) {
+					maxRadius = Mathf.Max(maxRadius, 10000 - hits.First().distance);
+					vertices[i * resolution + j] = hits.First().point - transform.position; // Relative to this.
+					Debug.DrawRay(transform.position, hits.First().point - transform.position, Color.green);
+				} else {
+					Debug.DrawRay(transform.position, direction * 10000, Color.red);
+				}
 			}
 		}
 
 		// Generate Triangles
-		for(int i = 0; i < resolution - 1; i += 1) {
-			for(int j = 0; j < resolution; j += 1) {
-				int offset = 6 * (i * resolution + j);
+		// Doesn't work, but doesn't seem to be needed for colliders
+		// for(int i = 0; i < resolution - 1; i += 1) {
+		// 	for(int j = 0; j < resolution; j += 1) {
+		// 		int offset = 6 * (i * resolution + j);
 
-				triangles[offset + 0] = i * resolution + j;
-				triangles[offset + 1] = i * resolution + ((j + 1) % resolution);
-				triangles[offset + 2] = ((i + 1) % resolution) * resolution + j;
+		// 		triangles[offset + 0] = i * resolution + j;
+		// 		triangles[offset + 1] = i * resolution + ((j + 1) % resolution);
+		// 		triangles[offset + 2] = ((i + 1) % resolution) * resolution + j;
 
-				triangles[offset + 3] = ((i + 1) % resolution) * resolution + ((j + 1) % resolution);
-				triangles[offset + 4] = i * resolution + ((j + 1) % resolution);
-				triangles[offset + 5] = ((i + 1) % resolution) * resolution + j;
-			}
-		}
+		// 		triangles[offset + 3] = ((i + 1) % resolution) * resolution + ((j + 1) % resolution);
+		// 		triangles[offset + 4] = i * resolution + ((j + 1) % resolution);
+		// 		triangles[offset + 5] = ((i + 1) % resolution) * resolution + j;
+		// 		break;
+		// 	}
+		// 	break;
+		// }
 
 		// Set up mesh
 		Mesh mesh = new Mesh();
@@ -138,6 +159,15 @@ public class CameraPosition : MonoBehaviour {
 		mesh.RecalculateNormals();
 		mesh.RecalculateBounds();
 		GetComponent<MeshCollider>().sharedMesh = mesh;
-		GetComponent<MeshFilter>().sharedMesh = mesh;
+		// GetComponent<MeshFilter>().sharedMesh = mesh;
+		
+		foreach(Transform child in transform.Find("Attached")) {
+			if(child.gameObject.GetComponent<Collider>()) {
+				child.gameObject.GetComponent<Collider>().enabled = false;
+			}
+		}
+
+		// Avoid loosing speed.
+		rb.velocity = initialVelocity;
 	}
 }
